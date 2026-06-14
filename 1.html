@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Mouth Ball Effect</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            color: #fff;
+            font-family: sans-serif;
+        }
+        /* ビデオ要素は非表示にし、Canvasに描画します */
+        video {
+            display: none;
+        }
+        /* 鏡のように表示するため反転させます */
+        canvas {
+            transform: scaleX(-1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+        #loading {
+            position: absolute;
+            font-size: 24px;
+            font-weight: bold;
+            z-index: 10;
+            text-align: center;
+            padding: 20px;
+        }
+        #loading.error {
+            color: #ff6b6b;
+            font-size: 18px;
+            max-width: 80vw;
+            line-height: 1.6;
+            white-space: pre-line;
+        }
+        #hint {
+            display: none;
+            position: absolute;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 28px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 0 0 12px rgba(255,180,255,0.9), 0 2px 8px rgba(0,0,0,0.8);
+            letter-spacing: 0.1em;
+            z-index: 10;
+            white-space: nowrap;
+            animation: hintPulse 2s ease-in-out infinite;
+        }
+        @keyframes hintPulse {
+            0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+            50%       { opacity: 0.6; transform: translateX(-50%) scale(1.05); }
+        }
+        #hint.fadeout {
+            animation: hintFade 1.5s ease forwards;
+        }
+        @keyframes hintFade {
+            from { opacity: 1; }
+            to   { opacity: 0; }
+        }
+    </style>
+
+    <!-- TensorFlow.js と関連ライブラリの読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"
+            integrity="sha384-ZVckeGw84RpbmPMzx1s9LFUqIaeIsG46rmlH/HynDuJikkmGLnTDnEmT0CrKI6Yi"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"
+            integrity="sha384-PAbE0QuTSZkDuS/hX4MEx1MZ0Nwd+mkb2Znz35ZqGDjb36klpR8/mCpykhdd7uHW"
+            crossorigin="anonymous"></script>
+    <!-- face-landmarks-detection と MediaPipe Face Mesh -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"
+            integrity="sha384-nKiz5QrpRlMQLw5nrZcprT7N9vmmAcIgV8TuGuep4x91V4JIPsXa+D44Wxj0guoa"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.2/dist/face-landmarks-detection.min.js"
+            integrity="sha384-v+aXTWZ9mBDvMmT13iP31Ou/YNuRG4bS8/NZzsqGI14BdcK3+sUqEL02F4zUQyf+"
+            crossorigin="anonymous"></script>
+    <script src="glassBall.js"></script>
+</head>
+<body>
+
+    <div id="loading">モデルとカメラを読み込み中...</div>
+    <div id="hint">👄 口をあけるとボールが飛び出るよ 👄</div>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const loading = document.getElementById('loading');
+        const hint    = document.getElementById('hint');
+
+        let detector;
+        let balls = [];
+        let frameCount = 0;
+
+        const GRAVITY = 0.35;  // 重力加速度
+        const DRAG    = 0.98;  // 空気抵抗
+
+        // MediaPipe Face Mesh の口ランドマークインデックス
+        const IDX_MOUTH_TOP    = 13;   // 上屠中央（内側）
+        const IDX_MOUTH_BOTTOM = 14;   // 下屠中央（内側）
+        const IDX_MOUTH_LEFT   = 61;   // 口の左端
+        const IDX_MOUTH_RIGHT  = 291;  // 口の右端
+
+        // 口が開いているとみなす縦横比の閾値
+        const MOUTH_OPEN_THRESHOLD = 0.28;
+
+        // ボールエフェクトを管理するクラス
+        class Ball {
+            /**
+             * @param {number} x       - 発生X座標（キャンバス空間）
+             * @param {number} y       - 発生Y座標（キャンバス空間）
+             * @param {number} angle   - 発射角度（ラジアン）
+             * @param {number} radius  - ボール半径（px）
+             */
+            constructor(x, y, angle, radius) {
+                this.x = x;
+                this.y = y;
+                this.life = 0;
+                this.maxLife = 120 + Math.random() * 60;
+                this.radius = radius;
+                this.hue = Math.random() * 360;
+                const speed = 7 + Math.random() * 7; // 7〜14 px/frame
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+            }
+
+            update() {
+                this.life++;
+                // 物理演算
+                this.vy += GRAVITY;
+                this.vx *= DRAG;
+                this.vy *= DRAG;
+                this.x += this.vx;
+                this.y += this.vy;
+                return this.life <= this.maxLife && this.y < canvas.height + this.radius * 2;
+            }
+
+            draw(ctx) {
+                const progress = this.life / this.maxLife;
+                let alpha = 1.0;
+                if (this.life < 8) {
+                    alpha = this.life / 8;
+                } else if (progress > 0.7) {
+                    alpha = 1.0 - ((progress - 0.7) / 0.3);
+                }
+
+                GlassBall.draw(ctx, this.x, this.y, this.radius, {
+                    alpha: Math.max(0, alpha),
+                    hue: this.hue,
+                    distortion: this.life * 0.05 + this.hue,
+                });
+            }
+        }
+
+        // 口の情報を取得（開口率・中心座標・ボールサイズ）
+        function getMouthInfo(keypoints, scaleX, scaleY, drawX, drawY) {
+            const top    = keypoints[IDX_MOUTH_TOP];
+            const bottom = keypoints[IDX_MOUTH_BOTTOM];
+            const left   = keypoints[IDX_MOUTH_LEFT];
+            const right  = keypoints[IDX_MOUTH_RIGHT];
+
+            if (!top || !bottom || !left || !right) return null;
+
+            // 縦横比 = 口の高さ / 口の幅
+            const mouthH = Math.hypot(top.x - bottom.x, top.y - bottom.y);
+            const mouthW = Math.hypot(left.x - right.x, left.y - right.y);
+            const ratio  = mouthH / (mouthW + 0.001);
+
+            // 口の中心（キャンバス空間）
+            const cx = ((left.x + right.x) / 2) * scaleX + drawX;
+            const cy = ((top.y  + bottom.y) / 2) * scaleY + drawY;
+
+            // 口の大きさに比例したボール半径（近いと大きく、遠いと小さく）
+            const ballRadius = Math.max(6, Math.min(22, mouthW * scaleX * 0.1));
+
+            return { ratio, cx, cy, ballRadius };
+        }
+
+        // 顔の向いている方向を取得（正規化済みベクトル）
+        // 額・顎・左右目の重心 → 鼻先 ベクトルを「顔の正面向き」として使用する
+        function getFaceDirection(keypoints) {
+            const noseTip  = keypoints[1];   // 鼻先
+            const forehead = keypoints[10];  // 額
+            const chin     = keypoints[152]; // 顎
+            const leftEye  = keypoints[33];  // 左目外端
+            const rightEye = keypoints[263]; // 右目外端
+
+            if (!noseTip || !forehead || !chin || !leftEye || !rightEye) {
+                return { dx: 0, dy: -1 }; // デフォルト：真上
+            }
+
+            // 顔の幾何学的中心（額・顎・左右目の平均）
+            const cx = (forehead.x + chin.x + leftEye.x + rightEye.x) / 4;
+            const cy = (forehead.y + chin.y + leftEye.y + rightEye.y) / 4;
+
+            // 中心 → 鼻先ベクトルが「顔の向き」
+            // キャンバスは CSS で scaleX(-1) 反転しているが、描画座標はビデオ空間のため
+            // x 方向はそのまま使うと画面左右が一致する
+            const dx = noseTip.x - cx;
+            const dy = noseTip.y - cy;
+            const len = Math.hypot(dx, dy);
+            if (len < 1) return { dx: 0, dy: -1 };
+            return { dx: dx / len, dy: dy / len };
+        }
+
+        // Webカメラのセットアップ
+        async function setupCamera() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error('このブラウザはカメラAPIに対応していません。Chrome または Edge をお試しください。');
+            }
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 },
+                    audio: false
+                });
+            } catch (e) {
+                if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+                    throw new Error('カメラへのアクセスが拒否されています。\nブラウザのアドレスバー横にあるカメラアイコンをクリックして「許可」してください。\n\n※ ファイルを直接開いている場合は、ローカルサーバー経由で開く必要があります。');
+                } else if (e.name === 'NotFoundError') {
+                    throw new Error('カメラが見つかりません。カメラが接続されているか確認してください。');
+                } else {
+                    throw new Error('カメラエラー: ' + e.name + ' - ' + e.message);
+                }
+            }
+            video.srcObject = stream;
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => { resolve(video); };
+            });
+        }
+
+        // カバーフィット描画計算
+        function getCoverRect() {
+            const vw = video.videoWidth  || 640;
+            const vh = video.videoHeight || 480;
+            const videoAspect  = vw / vh;
+            const canvasAspect = canvas.width / canvas.height;
+            let drawW, drawH, drawX, drawY;
+            if (videoAspect > canvasAspect) {
+                drawH = canvas.height;
+                drawW = drawH * videoAspect;
+                drawX = (canvas.width - drawW) / 2;
+                drawY = 0;
+            } else {
+                drawW = canvas.width;
+                drawH = drawW / videoAspect;
+                drawX = 0;
+                drawY = (canvas.height - drawH) / 2;
+            }
+            return { drawX, drawY, drawW, drawH, scaleX: drawW / vw, scaleY: drawH / vh };
+        }
+
+        // メインの描画ループ
+        async function renderLoop() {
+            const { drawX, drawY, drawW, drawH, scaleX, scaleY } = getCoverRect();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, drawX, drawY, drawW, drawH);
+
+            // 顔の検出
+            if (detector) {
+                const faces = await detector.estimateFaces(video);
+
+                faces.forEach(face => {
+                    const info = getMouthInfo(face.keypoints, scaleX, scaleY, drawX, drawY);
+                    if (!info) return;
+
+                    // 顔の向きを発射基準角度に変換
+                    const dir = getFaceDirection(face.keypoints);
+                    const baseAngle = Math.atan2(dir.dy, dir.dx);
+
+                    if (info.ratio > MOUTH_OPEN_THRESHOLD) {
+                        // 口が開いている → 3フレームごとにボールを発射
+                        if (frameCount % 3 === 0) {
+                            const numBalls = 2 + Math.floor(Math.random() * 2); // 2〜3個
+                            // 開口率に比例してボールを拡大（閾値ぴったり=1倍、大きく開くほど最大3倍）
+                            const ratioFactor = Math.min(3.0, info.ratio / MOUTH_OPEN_THRESHOLD);
+                            const scaledRadius = Math.min(48, info.ballRadius * ratioFactor);
+                            for (let i = 0; i < numBalls; i++) {
+                                // 顔の向きを基準に ±40° のランダム拡散
+                                const spread = (Math.random() - 0.5) * (Math.PI * 4 / 9);
+                                const angle  = baseAngle + spread;
+                                balls.push(new Ball(info.cx, info.cy, angle, scaledRadius));
+                            }
+                        }
+                    }
+                });
+            }
+
+            // ボールのアニメーション更新・描画
+            for (let i = balls.length - 1; i >= 0; i--) {
+                if (balls[i].update()) {
+                    balls[i].draw(ctx);
+                } else {
+                    balls.splice(i, 1);
+                }
+            }
+
+            frameCount++;
+            requestAnimationFrame(renderLoop);
+        }
+
+        // 初期化処理
+        async function init() {
+            if (location.protocol === 'file:') {
+                loading.innerHTML = '⚠️ file:// で開いています。<br>カメラが動作しない場合は、ローカルサーバー経由でアクセスしてください。<br><br>（例）<code>python3 -m http.server 8080</code> を実行後<br><a href="http://localhost:8080/1.html" style="color:#7af">http://localhost:8080/1.html</a> を開く<br><br>読み込み中...';
+            }
+
+            try {
+                await setupCamera();
+                video.play();
+
+                canvas.width  = window.innerWidth;
+                canvas.height = window.innerHeight;
+                window.addEventListener('resize', () => {
+                    canvas.width  = window.innerWidth;
+                    canvas.height = window.innerHeight;
+                });
+
+                loading.textContent = 'モデルを読み込み中...';
+
+                if (typeof faceLandmarksDetection === 'undefined') {
+                    throw new Error('face-landmarks-detection ライブラリが読み込めませんでした。\nネットワーク接続を確認してページを再読み込みしてください。');
+                }
+
+                const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
+                const detectorConfig = {
+                    runtime: 'mediapipe',
+                    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619',
+                    refineLandmarks: false,
+                };
+                detector = await faceLandmarksDetection.createDetector(model, detectorConfig);
+
+                loading.style.display = 'none';
+
+                hint.style.display = 'block';
+                setTimeout(() => {
+                    hint.classList.add('fadeout');
+                    hint.addEventListener('animationend', () => { hint.style.display = 'none'; }, { once: true });
+                }, 5000);
+
+                renderLoop();
+            } catch (err) {
+                loading.classList.add('error');
+                loading.textContent = '❌ エラーが発生しました:\n\n' + err.message;
+                console.error(err);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

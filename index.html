@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Play with Bubbles! | Bubbles</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; padding: 0;
+            background: #000;
+            overflow: hidden;
+            color: #fff;
+            font-family: sans-serif;
+        }
+        video { display: none; }
+        canvas {
+            transform: scaleX(-1);
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+        }
+        /* Loading */
+        #loading {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: 22px;
+            font-weight: bold;
+            z-index: 30;
+            padding: 20px;
+            pointer-events: none;
+        }
+        #loading.error {
+            color: #ff6b6b;
+            font-size: 16px;
+            line-height: 1.7;
+            white-space: pre-line;
+            pointer-events: auto;
+        }
+        /* Footer navigation */
+        #footer {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: 72px;
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            z-index: 20;
+            border-top: 1px solid rgba(255,255,255,0.10);
+            transition: transform 0.35s ease, opacity 0.25s ease;
+        }
+        #footer.is-hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(calc(100% + 20px));
+        }
+        .nav-btn {
+            flex: 1;
+            height: 100%;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            color: rgba(255,255,255,0.64);
+            font-size: 12px;
+            letter-spacing: 0.05em;
+            transition: color 0.2s, transform 0.15s;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .nav-btn .icon {
+            color: #fff;
+            font-size: 28px;
+            line-height: 1;
+        }
+        .nav-btn.active {
+            color: #fff;
+        }
+        .nav-btn.active .icon {
+            filter: drop-shadow(0 0 8px rgba(255,255,255,0.8));
+            transform: scale(1.18);
+        }
+        .nav-btn:active { transform: scale(0.92); }
+        #controls {
+            position: fixed;
+            top: max(14px, env(safe-area-inset-top));
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(360px, calc(100vw - 32px));
+            padding: 10px 14px;
+            display: grid;
+            gap: 8px;
+            color: rgba(255,255,255,0.82);
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.16);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            z-index: 21;
+            transition: transform 0.35s ease, opacity 0.25s ease;
+        }
+        #controls.is-hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: translate(-50%, calc(-100% - 32px));
+        }
+        .control-row {
+            display: grid;
+            grid-template-columns: 56px 1fr 42px;
+            align-items: center;
+            gap: 10px;
+        }
+        .control-row label,
+        .control-value {
+            font-size: 12px;
+            line-height: 1;
+            white-space: nowrap;
+            text-shadow: 0 1px 8px rgba(0,0,0,0.35);
+        }
+        .control-row input[type="range"] {
+            width: 100%;
+            accent-color: rgba(255,255,255,0.85);
+        }
+        #settings-toggle {
+            position: fixed;
+            top: max(14px, env(safe-area-inset-top));
+            right: max(14px, env(safe-area-inset-right));
+            width: 44px;
+            height: 44px;
+            border: 1px solid rgba(255,255,255,0.18);
+            background: rgba(255,255,255,0.12);
+            color: #fff;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            z-index: 24;
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            -webkit-tap-highlight-color: transparent;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+        #settings-toggle.is-hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-12px);
+        }
+        #settings-toggle i {
+            color: #fff;
+            font-size: 20px;
+        }
+        /* Spinner shown while switching effects */
+        #switching {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 16px;
+            color: rgba(255,255,255,0.7);
+            z-index: 25;
+            pointer-events: none;
+        }
+    </style>
+
+    <!-- ── Shared libraries used by all effects ── -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"
+            integrity="sha384-ZVckeGw84RpbmPMzx1s9LFUqIaeIsG46rmlH/HynDuJikkmGLnTDnEmT0CrKI6Yi"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"
+            integrity="sha384-PAbE0QuTSZkDuS/hX4MEx1MZ0Nwd+mkb2Znz35ZqGDjb36klpR8/mCpykhdd7uHW"
+            crossorigin="anonymous"></script>
+
+    <!-- ── Hand detection for effects 0 and 2 ── -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"
+            integrity="sha384-oHwoZ9HyKv5ark5VOH+XWdbNfmhYtptAOBuV8plz6mAfXvTA6d8fULuYllWouEK2"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js"
+            integrity="sha384-i6CbDrUnvLVXa+pIMpkX0yLzM4eQzlhugNq6jFntYXTGMnhk+JcchzouxFLI/xQX"
+            crossorigin="anonymous"></script>
+
+    <!-- ── Face landmark detection for effect 1 ── -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"
+            integrity="sha384-nKiz5QrpRlMQLw5nrZcprT7N9vmmAcIgV8TuGuep4x91V4JIPsXa+D44Wxj0guoa"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.2/dist/face-landmarks-detection.min.js"
+            integrity="sha384-v+aXTWZ9mBDvMmT13iP31Ou/YNuRG4bS8/NZzsqGI14BdcK3+sUqEL02F4zUQyf+"
+            crossorigin="anonymous"></script>
+
+    <!-- ── Physics engine for effect 2 ── -->
+    <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"
+            integrity="sha384-OqQP3UcU7efkEYDRjGmQou2uEvzGFGRtwdYXTjnupeB9cWogSgQ4BOhyklFBYbBR"
+            crossorigin="anonymous"></script>
+    <script src="glassBall.js"></script>
+</head>
+<body>
+    <div id="loading">Loading models and camera...</div>
+    <div id="switching">Switching...</div>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+    <button id="settings-toggle" type="button" aria-label="Settings">
+        <i class="fa-solid fa-gear" aria-hidden="true"></i>
+    </button>
+    <div id="controls">
+        <div class="control-row">
+            <label for="ball-size">Size</label>
+            <input id="ball-size" type="range" min="1" max="3" step="0.05" value="2">
+            <span id="size-value" class="control-value">200%</span>
+        </div>
+        <div class="control-row">
+            <label for="fall-speed">Fall</label>
+            <input id="fall-speed" type="range" min="0.05" max="1" step="0.05" value="0.15">
+            <span id="fall-speed-value" class="control-value">15%</span>
+        </div>
+        <div class="control-row">
+            <label for="ball-density">Density</label>
+            <input id="ball-density" type="range" min="0.05" max="0.5" step="0.01" value="0.5">
+            <span id="density-value" class="control-value">50%</span>
+        </div>
+    </div>
+
+    <nav id="footer">
+        <button class="nav-btn active" data-effect="0">
+            <i class="icon fa-solid fa-hand" aria-hidden="true"></i>
+            <span>Hands</span>
+        </button>
+        <button class="nav-btn" data-effect="1">
+            <i class="icon fa-solid fa-face-surprise" aria-hidden="true"></i>
+            <span>Mouth</span>
+        </button>
+        <button class="nav-btn" data-effect="2">
+            <i class="icon fa-solid fa-hands-bubbles" aria-hidden="true"></i>
+            <span>Physics</span>
+        </button>
+    </nav>
+
+    <script>
+    'use strict';
+    // ═══════════════════════════════════════════
+    // DOM references
+    // ═══════════════════════════════════════════
+    const video      = document.getElementById('video');
+    const canvas     = document.getElementById('canvas');
+    const ctx        = canvas.getContext('2d');
+    const loading    = document.getElementById('loading');
+    const switchingEl = document.getElementById('switching');
+    const controlsEl = document.getElementById('controls');
+    const footerEl = document.getElementById('footer');
+    const settingsToggle = document.getElementById('settings-toggle');
+    const navBtns    = document.querySelectorAll('.nav-btn');
+    const ballSizeInput = document.getElementById('ball-size');
+    const sizeValue = document.getElementById('size-value');
+    const fallSpeedInput = document.getElementById('fall-speed');
+    const fallSpeedValue = document.getElementById('fall-speed-value');
+    const densityInput = document.getElementById('ball-density');
+    const densityValue = document.getElementById('density-value');
+
+    // ═══════════════════════════════════════════
+    // App state
+    // ═══════════════════════════════════════════
+    let currentEffect = 0;
+    let animId        = null;
+    let isSwitching   = false;
+    let lastFrameTime = performance.now();
+    let uiHideTimer = null;
+    let ballSizeScale = Number(ballSizeInput.value);
+    const rainbowIntensity = 0.7;
+    let fallSpeedScale = Number(fallSpeedInput.value);
+    let ballDensityScale = Number(densityInput.value);
+
+    // Detectors initialized lazily
+    let handDetector = null;   // Shared by effects 0 and 2
+    let faceDetector = null;   // Used only by effect 1
+
+    function hideInteractiveUI() {
+        controlsEl.classList.add('is-hidden');
+        footerEl.classList.add('is-hidden');
+        settingsToggle.classList.remove('is-hidden');
+    }
+
+    function showInteractiveUI() {
+        controlsEl.classList.remove('is-hidden');
+        footerEl.classList.remove('is-hidden');
+        settingsToggle.classList.add('is-hidden');
+        scheduleInteractiveUIHide();
+    }
+
+    function scheduleInteractiveUIHide() {
+        clearTimeout(uiHideTimer);
+        uiHideTimer = setTimeout(hideInteractiveUI, 10000);
+    }
+
+    [controlsEl, footerEl].forEach(el => {
+        ['pointerdown', 'pointermove', 'touchstart', 'focusin'].forEach(type => {
+            el.addEventListener(type, scheduleInteractiveUIHide, { passive: true });
+        });
+    });
+
+    settingsToggle.addEventListener('click', showInteractiveUI);
+    function maybeShowInteractiveUIFromEdge(event) {
+        const target = event.target;
+        if (controlsEl.contains(target) || footerEl.contains(target) || settingsToggle.contains(target)) return;
+        if (event.clientY <= 40 || event.clientY >= window.innerHeight - 40) {
+            showInteractiveUI();
+        }
+    }
+    window.addEventListener('pointerdown', maybeShowInteractiveUIFromEdge, { passive: true });
+    window.addEventListener('mouseover', maybeShowInteractiveUIFromEdge, { passive: true });
+
+    const effectControlSettings = {
+        0: { size: 2.0, minSize: 1.0, maxSize: 3.0, density: 0.5, minDensity: 0.05, maxDensity: 0.5 },
+        1: { size: 1.5, minSize: 0.75, maxSize: 2.25, density: 0.5, minDensity: 0.05, maxDensity: 0.5 },
+        2: { size: 2.0, minSize: 1.0, maxSize: 3.0, density: 0.8, minDensity: 0.05, maxDensity: 0.8 },
+    };
+
+    function setControlValue(input, value, min, max) {
+        input.min = String(min);
+        input.max = String(max);
+        input.value = String(value);
+    }
+
+    function applyEffectControlSettings(effectIndex) {
+        const settings = effectControlSettings[effectIndex];
+        setControlValue(ballSizeInput, settings.size, settings.minSize, settings.maxSize);
+        setControlValue(densityInput, settings.density, settings.minDensity, settings.maxDensity);
+
+        ballSizeScale = Number(ballSizeInput.value);
+        ballDensityScale = Number(densityInput.value);
+        sizeValue.textContent = `${Math.round(ballSizeScale * 100)}%`;
+        densityValue.textContent = `${Math.round(ballDensityScale * 100)}%`;
+
+        if (physicsReady) syncPhysBallDensity();
+    }
+
+    ballSizeInput.addEventListener('input', () => {
+        scheduleInteractiveUIHide();
+        ballSizeScale = Number(ballSizeInput.value);
+        effectControlSettings[currentEffect].size = ballSizeScale;
+        sizeValue.textContent = `${Math.round(ballSizeScale * 100)}%`;
+    });
+    fallSpeedInput.addEventListener('input', () => {
+        scheduleInteractiveUIHide();
+        fallSpeedScale = Number(fallSpeedInput.value);
+        fallSpeedValue.textContent = `${Math.round(fallSpeedScale * 100)}%`;
+        if (physEngine) physEngine.gravity.y = fallSpeedScale;
+    });
+    densityInput.addEventListener('input', () => {
+        scheduleInteractiveUIHide();
+        ballDensityScale = Number(densityInput.value);
+        effectControlSettings[currentEffect].density = ballDensityScale;
+        densityValue.textContent = `${Math.round(ballDensityScale * 100)}%`;
+        if (physicsReady) syncPhysBallDensity();
+    });
+
+    // ═══════════════════════════════════════════
+    // ── Shared utilities ──
+    // ═══════════════════════════════════════════
+
+    /** Calculate the rectangle for drawing the video with cover-fit behavior. */
+    function getCoverRect() {
+        const vw = video.videoWidth  || 640;
+        const vh = video.videoHeight || 480;
+        const va = vw / vh, ca = canvas.width / canvas.height;
+        let drawW, drawH, drawX, drawY;
+        if (va > ca) {
+            drawH = canvas.height; drawW = drawH * va;
+            drawX = (canvas.width - drawW) / 2; drawY = 0;
+        } else {
+            drawW = canvas.width; drawH = drawW / va;
+            drawX = 0; drawY = (canvas.height - drawH) / 2;
+        }
+        return { drawX, drawY, drawW, drawH, scaleX: drawW / vw, scaleY: drawH / vh };
+    }
+
+    /** Set up the camera. Call this only once. */
+    async function setupCamera() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('This browser does not support the camera API. Please try Chrome or Edge.');
+        }
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 480 }, audio: false,
+            });
+        } catch (e) {
+            if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+                throw new Error('Camera access was denied.\nClick the camera icon next to the browser address bar and choose Allow.\n\nYou can open the app directly at https://icommuse.github.io/bubbles.');
+            } else if (e.name === 'NotFoundError') {
+                throw new Error('No camera was found. Please make sure a camera is connected.');
+            } else if (e instanceof TypeError) {
+                throw new Error('Camera initialization error (TypeError).\nPlease open the app at https://icommuse.github.io/bubbles.');
+            } else {
+                throw new Error('Camera error: ' + e.name + ' - ' + e.message);
+            }
+        }
+        video.srcObject = stream;
+        return new Promise(resolve => { video.onloadedmetadata = () => resolve(video); });
+    }
+
+    // ═══════════════════════════════════════════
+    // ── Effect 0: flowers ──
+    // ═══════════════════════════════════════════
+    const GRAVITY0 = 0.4, DRAG0 = 0.98;
+    let flowers    = [];
+    let frameCount0 = 0;
+    let nextFingerIndexByHand = [0, 0];
+
+    class Flower {
+        constructor(x, y, scale = 1.0, dirX = 0, dirY = -1) {
+            this.x = x; this.y = y;
+            this.life = 0; this.maxLife = 180;
+            this.size = (20 + Math.random() * 30) * scale;
+            this.hue = Math.random() * 360;
+            this.angle = Math.random() * Math.PI * 2;
+            const dir = Math.random() < 0.5 ? 1 : -1;
+            this.rotSpeed = dir * (0.04 + Math.random() * 0.08);
+            const speed  = 8 + Math.random() * 5;
+            const spread = (Math.random() - 0.5) * (Math.PI / 3.6);
+            const cos = Math.cos(spread), sin = Math.sin(spread);
+            this.vx = (dirX * cos - dirY * sin) * speed;
+            this.vy = (dirX * sin + dirY * cos) * speed;
+        }
+        update(step = 1) {
+            this.life += step;
+            this.vy += GRAVITY0 * fallSpeedScale * step;
+            this.vx *= Math.pow(DRAG0, step);
+            this.vy *= Math.pow(DRAG0, step);
+            this.x += this.vx * step;
+            this.y += this.vy * step;
+            this.rotSpeed *= Math.pow(1.002, step);
+            this.angle += this.rotSpeed * step;
+            return this.life <= this.maxLife && this.y < canvas.height + this.size * 2;
+        }
+        draw() {
+            const p = this.life / this.maxLife;
+            let a = 1.0;
+            if (this.life < 10)  a = this.life / 10;
+            else if (p > 0.7)    a = 1.0 - (p - 0.7) / 0.3;
+            GlassBall.draw(ctx, this.x, this.y, this.size * 0.58 * ballSizeScale, {
+                alpha: Math.max(0, a),
+                hue: this.hue,
+                rainbow: rainbowIntensity,
+                distortion: this.angle,
+            });
+        }
+    }
+
+    function getOpenHandFingers(keypoints) {
+        const defs = [
+            { tip: 4, pip: 2 }, { tip: 8, pip: 6 },
+            { tip: 12, pip: 10 }, { tip: 16, pip: 14 }, { tip: 20, pip: 18 },
+        ];
+        const wrist = keypoints[0];
+        const result = [];
+        for (const f of defs) {
+            const tip = keypoints[f.tip], pip = keypoints[f.pip];
+            if (Math.hypot(tip.x - wrist.x, tip.y - wrist.y) >
+                Math.hypot(pip.x - wrist.x, pip.y - wrist.y) * 1.2) {
+                result.push({ tip, pip });
+            } else { return []; }
+        }
+        return result;
+    }
+
+    function getHandScale(keypoints) {
+        const w = keypoints[0], m = keypoints[12];
+        return Math.max(0.3, Math.min(3.0, Math.hypot(m.x - w.x, m.y - w.y) / 180));
+    }
+
+    async function renderEffect0(step) {
+        const { drawX, drawY, drawW, drawH, scaleX, scaleY } = getCoverRect();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, drawX, drawY, drawW, drawH);
+
+        if (handDetector) {
+            const hands = await handDetector.estimateHands(video);
+            hands.forEach((hand, handIndex) => {
+                const openFingers = getOpenHandFingers(hand.keypoints);
+                if (openFingers.length === 5) {
+                    const scale = getHandScale(hand.keypoints);
+                    const spawnInterval = Math.max(1, Math.round(2 / ballDensityScale));
+                    if (frameCount0 % spawnInterval === 0) {
+                        const handSlot = handIndex % nextFingerIndexByHand.length;
+                        const fingerIndex = nextFingerIndexByHand[handSlot] % openFingers.length;
+                        const { tip, pip } = openFingers[fingerIndex];
+                        const dx = (tip.x - pip.x) * scaleX, dy = (tip.y - pip.y) * scaleY;
+                        const len = Math.hypot(dx, dy);
+                        flowers.push(new Flower(
+                            tip.x * scaleX + drawX, tip.y * scaleY + drawY,
+                            scale, len > 0 ? dx / len : 0, len > 0 ? dy / len : -1
+                        ));
+                        nextFingerIndexByHand[handSlot] = fingerIndex + 1;
+                    }
+                }
+            });
+        }
+
+        for (let i = flowers.length - 1; i >= 0; i--) {
+            if (flowers[i].update(step)) flowers[i].draw();
+            else flowers.splice(i, 1);
+        }
+        frameCount0++;
+    }
+
+    // ═══════════════════════════════════════════
+    // ── Effect 1: mouth balls ──
+    // ═══════════════════════════════════════════
+    const GRAVITY1 = 0.24, DRAG1 = 0.985;
+    const IDX_MOUTH_TOP = 13, IDX_MOUTH_BOTTOM = 14;
+    const IDX_MOUTH_LEFT = 61, IDX_MOUTH_RIGHT = 291;
+    const MOUTH_OPEN_THRESHOLD = 0.28;
+    let balls1      = [];
+    let frameCount1 = 0;
+
+    class Ball1 {
+        constructor(x, y, angle, radius) {
+            this.x = x; this.y = y;
+            this.life = 0; this.maxLife = 120 + Math.random() * 60;
+            this.radius = radius;
+            this.hue = Math.random() * 360;
+            const speed = 7 + Math.random() * 7;
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed;
+        }
+        update(step = 1) {
+            this.life += step;
+            this.vy += GRAVITY1 * fallSpeedScale * step;
+            this.vx *= Math.pow(DRAG1, step);
+            this.vy *= Math.pow(DRAG1, step);
+            this.x += this.vx * step;
+            this.y += this.vy * step;
+            return this.life <= this.maxLife && this.y < canvas.height + this.radius * 2;
+        }
+        draw() {
+            const p = this.life / this.maxLife;
+            let a = 1.0;
+            if (this.life < 8) a = this.life / 8;
+            else if (p > 0.7)  a = 1.0 - (p - 0.7) / 0.3;
+            GlassBall.draw(ctx, this.x, this.y, this.radius * ballSizeScale, {
+                alpha: Math.max(0, a),
+                hue: this.hue,
+                rainbow: rainbowIntensity,
+                distortion: this.life * 0.05 + this.hue,
+            });
+        }
+    }
+
+    function getMouthInfo(keypoints, scaleX, scaleY, drawX, drawY) {
+        const top = keypoints[IDX_MOUTH_TOP], bottom = keypoints[IDX_MOUTH_BOTTOM];
+        const left = keypoints[IDX_MOUTH_LEFT], right = keypoints[IDX_MOUTH_RIGHT];
+        if (!top || !bottom || !left || !right) return null;
+        const mouthH = Math.hypot(top.x - bottom.x, top.y - bottom.y);
+        const mouthW = Math.hypot(left.x - right.x, left.y - right.y);
+        const ratio  = mouthH / (mouthW + 0.001);
+        const cx = ((left.x + right.x) / 2) * scaleX + drawX;
+        const cy = ((top.y  + bottom.y) / 2) * scaleY + drawY;
+        const ballRadius = Math.max(6, Math.min(22, mouthW * scaleX * 0.1));
+        return { ratio, cx, cy, ballRadius };
+    }
+
+    function getFaceDirection(keypoints) {
+        const noseTip  = keypoints[1],  forehead = keypoints[10];
+        const chin     = keypoints[152], leftEye = keypoints[33], rightEye = keypoints[263];
+        if (!noseTip || !forehead || !chin || !leftEye || !rightEye) return { dx: 0, dy: -1 };
+        const cx = (forehead.x + chin.x + leftEye.x + rightEye.x) / 4;
+        const cy = (forehead.y + chin.y + leftEye.y + rightEye.y) / 4;
+        const dx = noseTip.x - cx, dy = noseTip.y - cy;
+        const len = Math.hypot(dx, dy);
+        return len < 1 ? { dx: 0, dy: -1 } : { dx: dx / len, dy: dy / len };
+    }
+
+    async function renderEffect1(step) {
+        const { drawX, drawY, drawW, drawH, scaleX, scaleY } = getCoverRect();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, drawX, drawY, drawW, drawH);
+
+        if (faceDetector) {
+            const faces = await faceDetector.estimateFaces(video);
+            faces.forEach(face => {
+                const info = getMouthInfo(face.keypoints, scaleX, scaleY, drawX, drawY);
+                if (!info) return;
+                const dir = getFaceDirection(face.keypoints);
+                const baseAngle = Math.atan2(dir.dy, dir.dx);
+                const spawnInterval = Math.max(1, Math.round(2 / ballDensityScale));
+                if (info.ratio > MOUTH_OPEN_THRESHOLD && frameCount1 % spawnInterval === 0) {
+                    const baseCount = 2 + Math.floor(Math.random() * 2);
+                    const numBalls = Math.max(1, Math.round(baseCount * ballDensityScale));
+                    const ratioFactor = Math.min(3.0, info.ratio / MOUTH_OPEN_THRESHOLD);
+                    const scaledRadius = Math.min(48, info.ballRadius * ratioFactor);
+                    for (let i = 0; i < numBalls; i++) {
+                        const spread = (Math.random() - 0.5) * (Math.PI * 4 / 9);
+                        balls1.push(new Ball1(info.cx, info.cy, baseAngle + spread, scaledRadius));
+                    }
+                }
+            });
+        }
+
+        for (let i = balls1.length - 1; i >= 0; i--) {
+            if (balls1[i].update(step)) balls1[i].draw();
+            else balls1.splice(i, 1);
+        }
+        frameCount1++;
+    }
+
+    // ═══════════════════════════════════════════
+    // ── Effect 2: physics balls ──
+    // ═══════════════════════════════════════════
+    const { Engine, World, Bodies, Body } = Matter;
+    const FINGERTIP_RADIUS = 18, BALL_RESTITUTION = 0.72;
+    const PHYS_HUES = [350, 43, 188, 317, 214, 262, 180, 31, 162, 18, 246, 332];
+
+    let physEngine   = null, physWorld = null;
+    let physBalls    = [];
+    let wallBodies   = [];
+    let handBodies   = [];
+    let prevHandPos  = new Array(10).fill(null);
+    let physicsReady = false;
+
+    function createWalls() {
+        const W = canvas.width, H = canvas.height, T = 80;
+        wallBodies = [
+            Bodies.rectangle(W/2,   H+T/2,  W+T*2, T, { isStatic: true, restitution: 0.5 }),
+            Bodies.rectangle(W/2,   -T/2,   W+T*2, T, { isStatic: true, restitution: 0.5 }),
+            Bodies.rectangle(-T/2,   H/2,   T, H+T*2, { isStatic: true, restitution: 0.5 }),
+            Bodies.rectangle(W+T/2,  H/2,   T, H+T*2, { isStatic: true, restitution: 0.5 }),
+        ];
+        World.add(physWorld, wallBodies);
+    }
+
+    function getPhysBallRadius() {
+        return Math.max(14, Math.min(26, canvas.width / 62));
+    }
+
+    function getTargetPhysBallCount() {
+        const W = canvas.width, H = canvas.height;
+        const r = getPhysBallRadius();
+        const baseCount = Math.round((W * H / 3) * 0.60 / (Math.PI * r * r));
+        return Math.min(360, Math.max(3, Math.round(baseCount * ballDensityScale)));
+    }
+
+    function createPhysBall(index = physBalls.length) {
+        const W = canvas.width;
+        const H = canvas.height;
+        const r = getPhysBallRadius();
+        const x = r*2 + Math.random() * (W - r*4);
+        const y = r*2 + Math.random() * (H - r*4);
+        const b = Bodies.circle(x, y, r, {
+            restitution: BALL_RESTITUTION, friction: 0.01, frictionAir: 0.004,
+            label: 'ball',
+            collisionFilter: { category: 0x0001, mask: 0x0001 | 0x0002 },
+        });
+        b._glassHue = PHYS_HUES[index % PHYS_HUES.length];
+        b._radius = r;
+        Body.setVelocity(b, { x: (Math.random()-0.5)*6, y: (Math.random()-0.5)*6 });
+        World.add(physWorld, b);
+        physBalls.push(b);
+    }
+
+    function syncPhysBallDensity() {
+        const targetCount = getTargetPhysBallCount();
+        while (physBalls.length < targetCount) {
+            createPhysBall(physBalls.length);
+        }
+        while (physBalls.length > targetCount) {
+            const b = physBalls.pop();
+            World.remove(physWorld, b);
+        }
+    }
+
+    function createPhysBalls() {
+        syncPhysBallDensity();
+    }
+
+    function setupPhysics() {
+        physEngine = Engine.create();
+        physWorld  = physEngine.world;
+        physEngine.gravity.y = fallSpeedScale;
+        createWalls();
+        createPhysBalls();
+        for (let i = 0; i < 10; i++) {
+            const hb = Bodies.circle(-500 - i*60, -500, FINGERTIP_RADIUS, {
+                isStatic: true, restitution: 0.90, friction: 0.02, label: 'hand',
+                collisionFilter: { category: 0x0002, mask: 0x0001 },
+            });
+            World.add(physWorld, hb);
+            handBodies.push(hb);
+        }
+        physicsReady = true;
+    }
+
+    function rebuildWalls() {
+        World.remove(physWorld, wallBodies);
+        wallBodies = [];
+        createWalls();
+    }
+
+    function getFingertips(keypoints, scaleX, scaleY, drawX, drawY) {
+        return [4, 8, 12, 16, 20].map(i => {
+            const kp = keypoints[i];
+            if (!kp) return null;
+            return { x: kp.x * scaleX + drawX, y: kp.y * scaleY + drawY };
+        });
+    }
+
+    async function renderEffect2(step) {
+        const { drawX, drawY, drawW, drawH, scaleX, scaleY } = getCoverRect();
+
+        // Detect fingertips.
+        const detectedPos = new Array(10).fill(null);
+        if (handDetector) {
+            try {
+                const hands = await handDetector.estimateHands(video);
+                hands.forEach((hand, hi) => {
+                    if (hi >= 2) return;
+                    getFingertips(hand.keypoints, scaleX, scaleY, drawX, drawY).forEach((tip, fi) => {
+                        detectedPos[hi * 5 + fi] = tip;
+                    });
+                });
+            } catch (_) { /* Ignore detection errors. */ }
+        }
+
+        // Move fingertip bodies kinematically.
+        detectedPos.forEach((pos, i) => {
+            const hb = handBodies[i];
+            if (pos) {
+                const prev = prevHandPos[i];
+                if (prev) Body.setVelocity(hb, { x: pos.x - prev.x, y: pos.y - prev.y });
+                Body.setPosition(hb, { x: pos.x, y: pos.y });
+                prevHandPos[i] = pos;
+            } else {
+                Body.setPosition(hb, { x: -500 - i*60, y: -500 });
+                Body.setVelocity(hb, { x: 0, y: 0 });
+                prevHandPos[i] = null;
+            }
+        });
+
+        physEngine.gravity.y = fallSpeedScale;
+        Engine.update(physEngine, (1000 / 60) * step);
+
+        // Reposition escaped balls.
+        const W = canvas.width, H = canvas.height;
+        for (const b of physBalls) {
+            const { x, y } = b.position;
+            if (x < -50 || x > W+50 || y < -50 || y > H+50) {
+                Body.setPosition(b, {
+                    x: b._radius*3 + Math.random()*(W - b._radius*6),
+                    y: b._radius*3 + Math.random()*(H * 0.5),
+                });
+                Body.setVelocity(b, { x: (Math.random()-0.5)*4, y: Math.random()*2 });
+            }
+        }
+
+        // Draw.
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, drawX, drawY, drawW, drawH);
+
+        for (const b of physBalls) {
+            const { x, y } = b.position;
+            const r = b._radius;
+            GlassBall.draw(ctx, x, y, r * ballSizeScale, {
+                hue: b._glassHue,
+                rainbow: rainbowIntensity,
+                distortion: b.angle + x * 0.01 + y * 0.01,
+            });
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    // ── Main loop ──
+    // ═══════════════════════════════════════════
+    async function renderLoop() {
+        const now = performance.now();
+        const step = Math.min(3, Math.max(0.25, (now - lastFrameTime) / (1000 / 60)));
+        lastFrameTime = now;
+
+        try {
+            switch (currentEffect) {
+                case 0: await renderEffect0(step); break;
+                case 1: await renderEffect1(step); break;
+                case 2: await renderEffect2(step); break;
+            }
+        } catch (_) { /* Ignore frame errors and continue. */ }
+        animId = requestAnimationFrame(renderLoop);
+    }
+
+    // ═══════════════════════════════════════════
+    // ── Effect switching ──
+    // ═══════════════════════════════════════════
+    async function switchEffect(n) {
+        if (n === currentEffect || isSwitching) return;
+        isSwitching = true;
+        switchingEl.style.display = 'block';
+        applyEffectControlSettings(n);
+
+        // Update the active state of the navigation buttons.
+        navBtns.forEach(btn => {
+            btn.classList.toggle('active', Number(btn.dataset.effect) === n);
+        });
+
+        try {
+            // Initialize detectors lazily.
+            if (n === 1 && !faceDetector) {
+                switchingEl.textContent = 'Loading face detection model...';
+                const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
+                faceDetector = await faceLandmarksDetection.createDetector(model, {
+                    runtime: 'mediapipe',
+                    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619',
+                    refineLandmarks: false,
+                });
+            }
+            if ((n === 0 || n === 2) && !handDetector) {
+                switchingEl.textContent = 'Loading hand detection model...';
+                handDetector = await handPoseDetection.createDetector(
+                    handPoseDetection.SupportedModels.MediaPipeHands, {
+                        runtime: 'mediapipe',
+                        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240',
+                        modelType: 'full', maxHands: 2,
+                    }
+                );
+            }
+            // Initialize the physics world lazily.
+            if (n === 2 && !physicsReady) {
+                setupPhysics();
+            }
+        } catch (err) {
+            console.error('Effect switch error:', err);
+        }
+
+        // Reset effect-specific state.
+        if (n === 0) { flowers = []; frameCount0 = 0; nextFingerIndexByHand = [0, 0]; }
+        if (n === 1) { balls1  = []; frameCount1 = 0; }
+        if (n === 2) { prevHandPos.fill(null); }
+
+        currentEffect = n;
+        lastFrameTime = performance.now();
+        switchingEl.style.display = 'none';
+        isSwitching = false;
+    }
+
+    // ═══════════════════════════════════════════
+    // ── Footer navigation event listeners ──
+    // ═══════════════════════════════════════════
+    navBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            scheduleInteractiveUIHide();
+            switchEffect(Number(btn.dataset.effect));
+        });
+    });
+    applyEffectControlSettings(currentEffect);
+    settingsToggle.classList.add('is-hidden');
+    scheduleInteractiveUIHide();
+
+    // ═══════════════════════════════════════════
+    // ── Resize handling ──
+    // ═══════════════════════════════════════════
+    window.addEventListener('resize', () => {
+        canvas.width  = window.innerWidth;
+        canvas.height = window.innerHeight;
+        if (physicsReady) rebuildWalls();
+    });
+
+    // ═══════════════════════════════════════════
+    // ── Initialization ──
+    // ═══════════════════════════════════════════
+    async function init() {
+        if (location.protocol === 'file:') {
+            loading.innerHTML =
+                '⚠️ Opened with file://.<br>If the camera does not work, you can open the app directly here.<br><br>' +
+                '<a href="https://icommuse.github.io/bubbles" style="color:#7af">https://icommuse.github.io/bubbles</a><br><br>' +
+                'Loading...';
+        }
+
+        try {
+            // ── 1. Initialize the TF.js backend ──
+            await tf.setBackend('webgl');
+            await tf.ready();
+        } catch (err) {
+            loading.classList.add('error');
+            loading.textContent = '❌ Failed to initialize TensorFlow.js:\n\n' + err.message;
+            console.error(err); return;
+        }
+
+        try {
+            // ── 2. Camera setup (request permission only once) ──
+            await setupCamera();
+            video.play();
+        } catch (err) {
+            loading.classList.add('error');
+            loading.textContent = '❌ Camera error:\n\n' + err.message;
+            console.error(err); return;
+        }
+
+        canvas.width  = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        try {
+            // ── 3. Initialize the hand detection model for the default effect (0: flowers) ──
+            loading.textContent = 'Loading hand detection model...';
+            handDetector = await handPoseDetection.createDetector(
+                handPoseDetection.SupportedModels.MediaPipeHands, {
+                    runtime: 'mediapipe',
+                    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240',
+                    modelType: 'full', maxHands: 2,
+                }
+            );
+        } catch (err) {
+            loading.classList.add('error');
+            loading.textContent = '❌ Failed to load the model:\n\n' + err.message;
+            console.error(err); return;
+        }
+
+        loading.style.display = 'none';
+        lastFrameTime = performance.now();
+        renderLoop();
+    }
+
+    init();
+    </script>
+</body>
+</html>

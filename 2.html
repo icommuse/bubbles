@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Ball Physics</title>
+    <style>
+        body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+        video { display: none; }
+        canvas {
+            transform: scaleX(-1);
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+        }
+        #loading {
+            position: absolute;
+            font-size: 24px;
+            font-weight: bold;
+            color: #fff;
+            z-index: 10;
+            text-align: center;
+            padding: 20px;
+        }
+        #loading.error {
+            color: #ff6b6b;
+            font-size: 18px;
+            max-width: 80vw;
+            line-height: 1.6;
+            white-space: pre-line;
+        }
+    </style>
+    <!-- TensorFlow.js と関連ライブラリ -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"
+            integrity="sha384-ZVckeGw84RpbmPMzx1s9LFUqIaeIsG46rmlH/HynDuJikkmGLnTDnEmT0CrKI6Yi"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"
+            integrity="sha384-PAbE0QuTSZkDuS/hX4MEx1MZ0Nwd+mkb2Znz35ZqGDjb36klpR8/mCpykhdd7uHW"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"
+            integrity="sha384-oHwoZ9HyKv5ark5VOH+XWdbNfmhYtptAOBuV8plz6mAfXvTA6d8fULuYllWouEK2"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js"
+            integrity="sha384-i6CbDrUnvLVXa+pIMpkX0yLzM4eQzlhugNq6jFntYXTGMnhk+JcchzouxFLI/xQX"
+            crossorigin="anonymous"></script>
+    <!-- matter.js 物理エンジン -->
+    <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"
+            integrity="sha384-OqQP3UcU7efkEYDRjGmQou2uEvzGFGRtwdYXTjnupeB9cWogSgQ4BOhyklFBYbBR"
+            crossorigin="anonymous"></script>
+    <script src="glassBall.js"></script>
+</head>
+<body>
+    <div id="loading">モデルとカメラを読み込み中...</div>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+    <script>
+        const { Engine, World, Bodies, Body } = Matter;
+
+        const video   = document.getElementById('video');
+        const canvas  = document.getElementById('canvas');
+        const ctx     = canvas.getContext('2d');
+        const loading = document.getElementById('loading');
+
+        let detector;
+        let engine, world;
+        let balls       = [];
+        let wallBodies  = [];
+        let handBodies  = [];                        // 手全体ボディ（21点×2手=42個）
+        let prevHandPos = new Array(42).fill(null); // 前フレームの手関節位置
+
+        const FINGERTIP_RADIUS = 16;   // 手関節コライダー半径（px）
+        const BALL_RESTITUTION = 0.72; // 弾性係数
+        const GLASS_HUES = [350, 43, 188, 317, 214, 262, 180, 31, 162, 18, 246, 332];
+
+        // カバーフィット計算
+        function getCoverRect() {
+            const vw = video.videoWidth  || 640;
+            const vh = video.videoHeight || 480;
+            const va = vw / vh, ca = canvas.width / canvas.height;
+            let drawW, drawH, drawX, drawY;
+            if (va > ca) {
+                drawH = canvas.height; drawW = drawH * va;
+                drawX = (canvas.width - drawW) / 2; drawY = 0;
+            } else {
+                drawW = canvas.width; drawH = drawW / va;
+                drawX = 0; drawY = (canvas.height - drawH) / 2;
+            }
+            return { drawX, drawY, drawW, drawH,
+                     scaleX: drawW / vw, scaleY: drawH / vh };
+        }
+
+        // 壁の生成（画面4辺）
+        function createWalls() {
+            const W = canvas.width, H = canvas.height, T = 80;
+            wallBodies = [
+                Bodies.rectangle(W/2,   H+T/2,  W+T*2, T, { isStatic:true, restitution:0.5 }), // 床
+                Bodies.rectangle(W/2,   -T/2,   W+T*2, T, { isStatic:true, restitution:0.5 }), // 天井
+                Bodies.rectangle(-T/2,   H/2,   T, H+T*2, { isStatic:true, restitution:0.5 }), // 左壁
+                Bodies.rectangle(W+T/2,  H/2,   T, H+T*2, { isStatic:true, restitution:0.5 }), // 右壁
+            ];
+            World.add(world, wallBodies);
+        }
+
+        // ボールの生成（画面の 1/3 を埋める量を動的計算）
+        function createBalls() {
+            const W = canvas.width, H = canvas.height;
+            const r = Math.max(14, Math.min(26, W / 62)); // 画面幅に比例した半径
+            const count = Math.min(240,
+                Math.round((W * H / 3) * 0.60 / (Math.PI * r * r))
+            );
+            for (let i = 0; i < count; i++) {
+                const x = r*2 + Math.random() * (W - r*4);
+                const y = r*2 + Math.random() * (H - r*4);
+                const b = Bodies.circle(x, y, r, {
+                    restitution: BALL_RESTITUTION,
+                    friction: 0.01, frictionAir: 0.004,
+                    label: 'ball',
+                    collisionFilter: { category: 0x0001, mask: 0x0001 | 0x0002 },
+                });
+                b._glassHue = GLASS_HUES[i % GLASS_HUES.length];
+                b._radius = r;
+                // 初速をランダムに与えてすぐ動き出す
+                Body.setVelocity(b, {
+                    x: (Math.random() - 0.5) * 6,
+                    y: (Math.random() - 0.5) * 6,
+                });
+                World.add(world, b);
+                balls.push(b);
+            }
+        }
+
+        // 物理ワールドの初期化
+        function setupPhysics() {
+            engine = Engine.create();
+            world  = engine.world;
+            engine.gravity.y = 1.0;
+            createWalls();
+            createBalls();
+            // 手全体ボディを42個（21点×2手）用意して画面外で待機
+            for (let i = 0; i < 42; i++) {
+                const hb = Bodies.circle(-500 - i * 60, -500, FINGERTIP_RADIUS, {
+                    isStatic: true,
+                    restitution: 0.90,
+                    friction: 0.02,
+                    label: 'hand',
+                    collisionFilter: { category: 0x0002, mask: 0x0001 },
+                });
+                World.add(world, hb);
+                handBodies.push(hb);
+            }
+        }
+
+        // リサイズ時に壁を再構築
+        function rebuildWalls() {
+            World.remove(world, wallBodies);
+            createWalls();
+        }
+
+        // カメラセットアップ
+        async function setupCamera() {
+            if (!navigator.mediaDevices?.getUserMedia) {
+                throw new Error('このブラウザはカメラAPIに対応していません。Chrome または Edge をお試しください。');
+            }
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 }, audio: false,
+                });
+            } catch (e) {
+                if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+                    throw new Error('カメラへのアクセスが拒否されています。\nブラウザのアドレスバー横にあるカメラアイコンをクリックして「許可」してください。\n\n※ ファイルを直接開いている場合は、ローカルサーバー経由で開く必要があります。');
+                } else if (e.name === 'NotFoundError') {
+                    throw new Error('カメラが見つかりません。カメラが接続されているか確認してください。');
+                } else {
+                    throw new Error('カメラエラー: ' + e.name + ' - ' + e.message);
+                }
+            }
+            video.srcObject = stream;
+            return new Promise(r => { video.onloadedmetadata = () => r(video); });
+        }
+
+        // 手全体21点（手首・各指の全関節・指先）をキャンバス座標に変換
+        function getHandPoints(keypoints, scaleX, scaleY, drawX, drawY) {
+            return Array.from({ length: 21 }, (_, i) => {
+                const kp = keypoints[i];
+                if (!kp) return null;
+                return { x: kp.x * scaleX + drawX, y: kp.y * scaleY + drawY };
+            });
+        }
+
+        // メイン描画ループ
+        async function renderLoop() {
+            const { drawX, drawY, drawW, drawH, scaleX, scaleY } = getCoverRect();
+
+            // 手の検出（全関節42点: 21点×2手）
+            const detectedPos = new Array(42).fill(null);
+            if (detector) {
+                try {
+                    const hands = await detector.estimateHands(video);
+                    hands.forEach((hand, hi) => {
+                        if (hi >= 2) return;
+                        const pts = getHandPoints(
+                            hand.keypoints, scaleX, scaleY, drawX, drawY
+                        );
+                        pts.forEach((pt, fi) => {
+                            detectedPos[hi * 21 + fi] = pt;
+                        });
+                    });
+                } catch (_) { /* 検出エラーは無視してループ継続 */ }
+            }
+
+            // 指先ボディをキネマティックに移動
+            detectedPos.forEach((pos, i) => {
+                const hb = handBodies[i];
+                if (pos) {
+                    const prev = prevHandPos[i];
+                    if (prev) {
+                        Body.setVelocity(hb, { x: pos.x - prev.x, y: pos.y - prev.y });
+                    }
+                    Body.setPosition(hb, { x: pos.x, y: pos.y });
+                    prevHandPos[i] = pos;
+                } else {
+                    Body.setPosition(hb, { x: -500 - i * 60, y: -500 });
+                    Body.setVelocity(hb, { x: 0, y: 0 });
+                    prevHandPos[i] = null;
+                }
+            });
+
+            // 物理演算を 1 フレーム分進める
+            Engine.update(engine, 1000 / 60);
+
+            // ── ボール脱出バグ修正：アリーナ外に出たボールを内側に戻す ──
+            const W = canvas.width, H = canvas.height;
+            for (const b of balls) {
+                const { x, y } = b.position;
+                if (x < -50 || x > W + 50 || y < -50 || y > H + 50) {
+                    Body.setPosition(b, {
+                        x: b._radius * 3 + Math.random() * (W - b._radius * 6),
+                        y: b._radius * 3 + Math.random() * (H * 0.5),
+                    });
+                    Body.setVelocity(b, {
+                        x: (Math.random() - 0.5) * 4,
+                        y: Math.random() * 2,
+                    });
+                }
+            }
+
+            // ── 描画 ──
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // カメラ映像
+            ctx.drawImage(video, drawX, drawY, drawW, drawH);
+
+            // ボール（glass/refraction sphere）
+            for (const b of balls) {
+                const { x, y } = b.position;
+                const r = b._radius;
+                GlassBall.draw(ctx, x, y, r, {
+                    hue: b._glassHue,
+                    distortion: b.angle + x * 0.01 + y * 0.01,
+                });
+            }
+
+            requestAnimationFrame(renderLoop);
+        }
+
+        // 初期化
+        async function init() {
+            if (location.protocol === 'file:') {
+                loading.innerHTML = '&#x26A0;&#xFE0F; file:// で開いています。<br>ローカルサーバー経由でアクセスしてください。<br><br>（例）<code>python3 -m http.server 8080</code> を実行後<br><a href="http://localhost:8080/2.html" style="color:#7af">http://localhost:8080/2.html</a> を開く<br><br>読み込み中...';
+            }
+            try {
+                await setupCamera();
+                video.play();
+                canvas.width  = window.innerWidth;
+                canvas.height = window.innerHeight;
+                window.addEventListener('resize', () => {
+                    canvas.width  = window.innerWidth;
+                    canvas.height = window.innerHeight;
+                    if (world) rebuildWalls();
+                });
+
+                loading.textContent = 'モデルを読み込み中...';
+
+                if (typeof handPoseDetection === 'undefined') {
+                    throw new Error('hand-pose-detection ライブラリが読み込めませんでした。\nネットワーク接続を確認してページを再読み込みしてください。');
+                }
+
+                const model = handPoseDetection.SupportedModels.MediaPipeHands;
+                detector = await handPoseDetection.createDetector(model, {
+                    runtime: 'mediapipe',
+                    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240',
+                    modelType: 'full',
+                    maxHands: 2,
+                });
+
+                setupPhysics();
+                loading.style.display = 'none';
+                renderLoop();
+            } catch (err) {
+                loading.classList.add('error');
+                loading.textContent = '\u274C エラーが発生しました:\n\n' + err.message;
+                console.error(err);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

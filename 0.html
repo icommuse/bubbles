@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Pose Flower Effect</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            color: #fff;
+            font-family: sans-serif;
+        }
+        /* ビデオ要素は非表示にし、Canvasに描画します */
+        video {
+            display: none;
+        }
+        /* 鏡のように表示するため反転させます */
+        canvas {
+            transform: scaleX(-1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+        #loading {
+            position: absolute;
+            font-size: 24px;
+            font-weight: bold;
+            z-index: 10;
+            text-align: center;
+            padding: 20px;
+        }
+        #loading.error {
+            color: #ff6b6b;
+            font-size: 18px;
+            max-width: 80vw;
+            line-height: 1.6;
+            white-space: pre-line;
+        }
+        #hint {
+            display: none;
+            position: absolute;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 28px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 0 0 12px rgba(255,180,255,0.9), 0 2px 8px rgba(0,0,0,0.8);
+            letter-spacing: 0.1em;
+            z-index: 10;
+            white-space: nowrap;
+            animation: hintPulse 2s ease-in-out infinite;
+        }
+        @keyframes hintPulse {
+            0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+            50%       { opacity: 0.6; transform: translateX(-50%) scale(1.05); }
+        }
+        #hint.fadeout {
+            animation: hintFade 1.5s ease forwards;
+        }
+        @keyframes hintFade {
+            from { opacity: 1; }
+            to   { opacity: 0; }
+        }
+    </style>
+
+    <!-- TensorFlow.js と関連ライブラリの読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"
+            integrity="sha384-ZVckeGw84RpbmPMzx1s9LFUqIaeIsG46rmlH/HynDuJikkmGLnTDnEmT0CrKI6Yi"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"
+            integrity="sha384-PAbE0QuTSZkDuS/hX4MEx1MZ0Nwd+mkb2Znz35ZqGDjb36klpR8/mCpykhdd7uHW"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"
+            integrity="sha384-oHwoZ9HyKv5ark5VOH+XWdbNfmhYtptAOBuV8plz6mAfXvTA6d8fULuYllWouEK2"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js"
+            integrity="sha384-i6CbDrUnvLVXa+pIMpkX0yLzM4eQzlhugNq6jFntYXTGMnhk+JcchzouxFLI/xQX"
+            crossorigin="anonymous"></script>
+    <script src="glassBall.js"></script>
+</head>
+<body>
+
+    <div id="loading">モデルとカメラを読み込み中...</div>
+    <div id="hint">手をひらくとガラスボールが出るよ</div>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const loading = document.getElementById('loading');
+        const hint    = document.getElementById('hint');
+
+        let detector;
+        let flowers = [];
+        let frameCount = 0;
+
+        const GRAVITY = 0.4;   // 重力加速度 (px/frame²)
+        const DRAG   = 0.98;   // 空気抵抗（速度に毎フレーム掛ける係数）
+
+        // 花のエフェクトを管理するクラス
+        class Flower {
+            /**
+             * @param {number} x       - 発生X座標（キャンバス空間）
+             * @param {number} y       - 発生Y座標（キャンバス空間）
+             * @param {number} scale   - サイズ倍率
+             * @param {number} dirX    - 指の向きベクトルX（正規化済み）
+             * @param {number} dirY    - 指の向きベクトルY（正規化済み）
+             */
+            constructor(x, y, scale = 1.0, dirX = 0, dirY = -1) {
+                this.x = x;
+                this.y = y;
+                this.life = 0;
+                this.maxLife = 180; // 約3秒（180フレーム）で消える
+                this.size = (20 + Math.random() * 30) * scale;
+                this.hue = Math.random() * 360;
+                this.angle = Math.random() * Math.PI * 2;
+                const dir = Math.random() < 0.5 ? 1 : -1;
+                this.rotSpeed = dir * (0.04 + Math.random() * 0.08);
+                // 指の方向を主軸にした初速（± 25° のランダム拡散を加える）
+                const LAUNCH_SPEED = 8 + Math.random() * 5;   // 8〜13 px/frame
+                const spread = (Math.random() - 0.5) * (Math.PI / 3.6); // ±25°
+                const cos = Math.cos(spread);
+                const sin = Math.sin(spread);
+                // 2D回転で拡散を適用
+                const rx = dirX * cos - dirY * sin;
+                const ry = dirX * sin + dirY * cos;
+                this.vx = rx * LAUNCH_SPEED;
+                this.vy = ry * LAUNCH_SPEED;
+            }
+
+            update() {
+                this.life++;
+                // 物理演算：重力を加算し空気抵抗を適用
+                this.vy += GRAVITY;
+                this.vx *= DRAG;
+                this.vy *= DRAG;
+                this.x += this.vx;
+                this.y += this.vy;
+                // 落下とともに回転が増す（角運動量保存の演出）
+                this.rotSpeed *= 1.002;
+                this.angle += this.rotSpeed;
+                // 寿命が尽きるか画面外下に出たら消える
+                return this.life <= this.maxLife && this.y < canvas.height + this.size * 2;
+            }
+
+            draw(ctx) {
+                const progress = this.life / this.maxLife;
+
+                // 最初の10フレームでフェードイン、最後の30%でフェードアウト
+                let alpha = 1.0;
+                if (this.life < 10) {
+                    alpha = this.life / 10;
+                } else if (progress > 0.7) {
+                    alpha = 1.0 - ((progress - 0.7) / 0.3);
+                }
+
+                GlassBall.draw(ctx, this.x, this.y, this.size * 0.58, {
+                    alpha: Math.max(0, alpha),
+                    hue: this.hue,
+                    distortion: this.angle,
+                });
+            }
+        }
+
+        // 全ての指が開いているとき { tip, pip } の配列を返す（1本でも曲がっていれば空配列）
+        function getOpenHandFingers(keypoints) {
+            const fingers = [
+                { tip: 4, pip: 2 },   // 親指
+                { tip: 8, pip: 6 },   // 人差し指
+                { tip: 12, pip: 10 }, // 中指
+                { tip: 16, pip: 14 }, // 薬指
+                { tip: 20, pip: 18 }  // 小指
+            ];
+            const wrist = keypoints[0];
+            const result = [];
+
+            for (const f of fingers) {
+                const tip = keypoints[f.tip];
+                const pip = keypoints[f.pip];
+
+                const distTip = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+                const distPip = Math.hypot(pip.x - wrist.x, pip.y - wrist.y);
+
+                if (distTip > distPip * 1.2) {
+                    result.push({ tip, pip }); // tip と pip を両方保持
+                } else {
+                    return []; // 1本でも曲がっていたら即終了
+                }
+            }
+            return result; // 全5本が伸びている場合のみ返す
+        }
+
+        // 手首〜中指先端の距離から花のスケールを計算（近いほど大きく、遠いほど小さく）
+        function getHandScale(keypoints) {
+            const wrist = keypoints[0];
+            const middleTip = keypoints[12];
+            const handSize = Math.hypot(middleTip.x - wrist.x, middleTip.y - wrist.y);
+            // 基準サイズ180px → 倍率1.0。範囲: 0.3〜3.0 にクランプ
+            return Math.max(0.3, Math.min(3.0, handSize / 180));
+        }
+
+        // Webカメラのセットアップ
+        async function setupCamera() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error('このブラウザはカメラAPIに対応していません。Chrome または Edge をお試しください。');
+            }
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 },
+                    audio: false
+                });
+            } catch (e) {
+                if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+                    throw new Error('カメラへのアクセスが拒否されています。\nブラウザのアドレスバー横にあるカメラアイコンをクリックして「許可」してください。\n\n※ ファイルを直接開いている場合は、ローカルサーバー経由で開く必要があります。');
+                } else if (e.name === 'NotFoundError') {
+                    throw new Error('カメラが見つかりません。カメラが接続されているか確認してください。');
+                } else {
+                    throw new Error('カメラエラー: ' + e.name + ' - ' + e.message);
+                }
+            }
+            video.srcObject = stream;
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => { resolve(video); };
+            });
+        }
+
+        // ビデオをアスペクト比を保ったままキャンバス全体を覆うように描画するための計算
+        function getCoverRect() {
+            const vw = video.videoWidth  || 640;
+            const vh = video.videoHeight || 480;
+            const videoAspect  = vw / vh;
+            const canvasAspect = canvas.width / canvas.height;
+            let drawW, drawH, drawX, drawY;
+            if (videoAspect > canvasAspect) {
+                // ビデオが横長 → 高さ合わせ、左右をはみ出させる
+                drawH = canvas.height;
+                drawW = drawH * videoAspect;
+                drawX = (canvas.width - drawW) / 2;
+                drawY = 0;
+            } else {
+                // ビデオが縦長 → 幅合わせ、上下をはみ出させる
+                drawW = canvas.width;
+                drawH = drawW / videoAspect;
+                drawX = 0;
+                drawY = (canvas.height - drawH) / 2;
+            }
+            return { drawX, drawY, drawW, drawH, scaleX: drawW / vw, scaleY: drawH / vh };
+        }
+
+        // メインの描画ループ
+        async function renderLoop() {
+            // アスペクト比を保ったままキャンバス全体に描画（カバーフィット）
+            const { drawX, drawY, drawW, drawH, scaleX, scaleY } = getCoverRect();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, drawX, drawY, drawW, drawH);
+
+            // 手の検出
+            if (detector) {
+                const hands = await detector.estimateHands(video);
+
+                // 検出された全ての手に対して処理
+                hands.forEach(hand => {
+                    // 全指が開いているときのみ { tip, pip } リストを取得
+                    const openFingers = getOpenHandFingers(hand.keypoints);
+
+                    // 全5本の指が開いている場合のみ花を発生させる
+                    if (openFingers.length === 5) {
+                        const scale = getHandScale(hand.keypoints);
+                        openFingers.forEach(({ tip, pip }) => {
+                            if (frameCount % 4 === 0) {
+                                // 指の方向ベクトル（pip → tip）をキャンバス空間で計算
+                                const dx = (tip.x - pip.x) * scaleX;
+                                const dy = (tip.y - pip.y) * scaleY;
+                                const len = Math.hypot(dx, dy);
+                                // 正規化（長さが0なら真上をデフォルトに）
+                                const dirX = len > 0 ? dx / len : 0;
+                                const dirY = len > 0 ? dy / len : -1;
+                                flowers.push(new Flower(
+                                    tip.x * scaleX + drawX,
+                                    tip.y * scaleY + drawY,
+                                    scale,
+                                    dirX, dirY
+                                ));
+                            }
+                        });
+                    }
+                });
+            }
+
+            // 花のアニメーション更新と描画
+            for (let i = flowers.length - 1; i >= 0; i--) {
+                const isAlive = flowers[i].update();
+                if (isAlive) {
+                    flowers[i].draw(ctx);
+                } else {
+                    // 寿命が尽きた花を配列から削除
+                    flowers.splice(i, 1);
+                }
+            }
+
+            frameCount++;
+            requestAnimationFrame(renderLoop);
+        }
+
+        // 初期化処理
+        async function init() {
+            // file:// プロトコルの警告
+            if (location.protocol === 'file:') {
+                loading.innerHTML = '⚠️ file:// で開いています。<br>カメラが動作しない場合は、ローカルサーバー経由でアクセスしてください。<br><br>（例）<code>python3 -m http.server 8080</code> を実行後<br><a href="http://localhost:8080/flower.html" style="color:#7af">http://localhost:8080/flower.html</a> を開く<br><br>読み込み中...';
+            }
+
+            try {
+                await setupCamera();
+                video.play();
+
+                // キャンバスをウィンドウ全体のサイズに設定
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+
+                // ウィンドウリサイズ時にキャンバスも追従
+                window.addEventListener('resize', () => {
+                    canvas.width = window.innerWidth;
+                    canvas.height = window.innerHeight;
+                });
+
+                loading.textContent = 'モデルを読み込み中...';
+
+                // TensorFlow.js hand-pose-detection のモデルロード
+                if (typeof handPoseDetection === 'undefined') {
+                    throw new Error('hand-pose-detection ライブラリが読み込めませんでした。\nネットワーク接続を確認してページを再読み込みしてください。');
+                }
+
+                const model = handPoseDetection.SupportedModels.MediaPipeHands;
+                const detectorConfig = {
+                    runtime: 'mediapipe',
+                    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240',
+                    modelType: 'full'
+                };
+                
+                detector = await handPoseDetection.createDetector(model, detectorConfig);
+
+                loading.style.display = 'none'; // ロード完了でテキスト非表示
+
+                // ヒントメッセージを表示し、5秒後にフェードアウトして消す
+                hint.style.display = 'block';
+                setTimeout(() => {
+                    hint.classList.add('fadeout');
+                    hint.addEventListener('animationend', () => { hint.style.display = 'none'; }, { once: true });
+                }, 5000);
+
+                renderLoop(); // ループ開始
+            } catch (err) {
+                loading.classList.add('error');
+                loading.textContent = '❌ エラーが発生しました:\n\n' + err.message;
+                console.error(err);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
