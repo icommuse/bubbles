@@ -6,7 +6,7 @@ The project uses hand, face, and pose-style interactions to create playful glass
 
 ## Quick Access
 
-You can open Bubbles directly at <https://icommuse.github.io/bubbles[https://icommuse.github.io/bubbles]>.
+You can open Bubbles directly at <https://icommuse.github.io/bubbles>.
 
 Bubbles works with the camera on a PC, smartphone, or tablet. It can be enjoyed on the device screen, and it may feel even more playful when the screen is shown large with a projector so the bubbles can fill a room or shared space.
 
