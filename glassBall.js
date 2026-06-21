@@ -3,6 +3,15 @@
 
     const REFRACTION_RATIO_WEAK = 0.95;
     const REFRACTION_RATIO_STRONG = 0.78;
+    const BUBBLE_COLORS = [
+        [255, 72, 92],   // red
+        [255, 154, 46],  // orange
+        [255, 220, 64],  // yellow
+        [68, 214, 118],  // green
+        [54, 190, 255],  // blue
+        [105, 105, 255], // indigo
+        [213, 82, 255],  // violet
+    ];
 
     const sourceCanvas = document.createElement('canvas');
     const sourceCtx = sourceCanvas.getContext('2d');
@@ -144,6 +153,26 @@
         ctx.restore();
     }
 
+    function drawColorTint(ctx, x, y, radius, color, intensity) {
+        const [red, green, blue] = color;
+        const tint = ctx.createRadialGradient(
+            x - radius * 0.32, y - radius * 0.38, radius * 0.08,
+            x, y, radius
+        );
+        tint.addColorStop(0, `rgba(${red}, ${green}, ${blue}, ${0.08 * intensity})`);
+        tint.addColorStop(0.58, `rgba(${red}, ${green}, ${blue}, ${0.18 * intensity})`);
+        tint.addColorStop(1, `rgba(${red}, ${green}, ${blue}, ${0.38 * intensity})`);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = tint;
+        ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+        ctx.restore();
+    }
+
     function drawGlassShell(ctx, x, y, radius, alpha) {
         const rim = ctx.createRadialGradient(x, y, radius * 0.70, x, y, radius);
         rim.addColorStop(0, 'rgba(255,255,255,0)');
@@ -178,11 +207,14 @@
 
         const rainbow = clamp01(settings.rainbow == null ? 0.2 : settings.rainbow);
         const distortion = settings.distortion == null ? (x * 0.012 + y * 0.008) : settings.distortion;
+        const hue = ((settings.hue == null ? distortion * 57.2958 : settings.hue) % 360 + 360) % 360;
+        const colorIndex = Math.floor(hue / 360 * BUBBLE_COLORS.length) % BUBBLE_COLORS.length;
 
         ctx.save();
         ctx.globalAlpha *= alpha;
         drawRefractedBackground(ctx, x, y, radius, distortion, rainbow);
-        drawRainbowTint(ctx, x, y, radius, rainbow, distortion);
+        drawColorTint(ctx, x, y, radius, BUBBLE_COLORS[colorIndex], 0.75 + rainbow * 0.25);
+        drawRainbowTint(ctx, x, y, radius, rainbow * 0.35, distortion);
         drawGlassShell(ctx, x, y, radius, alpha);
         ctx.restore();
     }
