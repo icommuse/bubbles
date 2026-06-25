@@ -12,6 +12,7 @@
         [105, 105, 255], // indigo
         [213, 82, 255],  // violet
     ];
+    const BASE_BUBBLE_COLOR = [190, 230, 255];
 
     const sourceCanvas = document.createElement('canvas');
     const sourceCtx = sourceCanvas.getContext('2d');
@@ -29,6 +30,15 @@
     function smoothstep(edge0, edge1, value) {
         const t = clamp01((value - edge0) / (edge1 - edge0));
         return t * t * (3 - 2 * t);
+    }
+
+    function mixColor(a, b, amount) {
+        const t = clamp01(amount);
+        return [
+            Math.round(a[0] * (1 - t) + b[0] * t),
+            Math.round(a[1] * (1 - t) + b[1] * t),
+            Math.round(a[2] * (1 - t) + b[2] * t),
+        ];
     }
 
     function ensureCanvas(canvas, width, height) {
@@ -209,11 +219,15 @@
         const distortion = settings.distortion == null ? (x * 0.012 + y * 0.008) : settings.distortion;
         const hue = ((settings.hue == null ? distortion * 57.2958 : settings.hue) % 360 + 360) % 360;
         const colorIndex = Math.floor(hue / 360 * BUBBLE_COLORS.length) % BUBBLE_COLORS.length;
+        const colorVariation = smoothstep(0, 1, rainbow);
+        const tintColor = mixColor(BASE_BUBBLE_COLOR, BUBBLE_COLORS[colorIndex], colorVariation);
+        const tintIntensity = 0.14 + rainbow * 0.96;
+        const visibility = 0.42 + rainbow * 0.58;
 
         ctx.save();
-        ctx.globalAlpha *= alpha;
+        ctx.globalAlpha *= alpha * visibility;
         drawRefractedBackground(ctx, x, y, radius, distortion, rainbow);
-        drawColorTint(ctx, x, y, radius, BUBBLE_COLORS[colorIndex], 0.75 + rainbow * 0.25);
+        drawColorTint(ctx, x, y, radius, tintColor, tintIntensity);
         drawRainbowTint(ctx, x, y, radius, rainbow * 0.35, distortion);
         drawGlassShell(ctx, x, y, radius, alpha);
         ctx.restore();

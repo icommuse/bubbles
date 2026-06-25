@@ -226,6 +226,11 @@
             <input id="ball-density" type="range" min="0.05" max="0.5" step="0.01" value="0.5">
             <span id="density-value" class="control-value">50%</span>
         </div>
+        <div class="control-row">
+            <label for="rainbow-intensity">Rainbow</label>
+            <input id="rainbow-intensity" type="range" min="0" max="1" step="0.05" value="0.7">
+            <span id="rainbow-value" class="control-value">70%</span>
+        </div>
     </div>
 
     <nav id="footer">
@@ -263,6 +268,8 @@
     const fallSpeedValue = document.getElementById('fall-speed-value');
     const densityInput = document.getElementById('ball-density');
     const densityValue = document.getElementById('density-value');
+    const rainbowInput = document.getElementById('rainbow-intensity');
+    const rainbowValue = document.getElementById('rainbow-value');
 
     // ═══════════════════════════════════════════
     // App state
@@ -273,7 +280,7 @@
     let lastFrameTime = performance.now();
     let uiHideTimer = null;
     let ballSizeScale = Number(ballSizeInput.value);
-    const rainbowIntensity = 0.7;
+    let rainbowIntensity = Number(rainbowInput.value);
     let fallSpeedScale = Number(fallSpeedInput.value);
     let ballDensityScale = Number(densityInput.value);
 
@@ -359,6 +366,11 @@
         effectControlSettings[currentEffect].density = ballDensityScale;
         densityValue.textContent = `${Math.round(ballDensityScale * 100)}%`;
         if (physicsReady) syncPhysBallDensity();
+    });
+    rainbowInput.addEventListener('input', () => {
+        scheduleInteractiveUIHide();
+        rainbowIntensity = Number(rainbowInput.value);
+        rainbowValue.textContent = `${Math.round(rainbowIntensity * 100)}%`;
     });
 
     // ═══════════════════════════════════════════
